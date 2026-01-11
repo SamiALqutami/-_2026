@@ -1,95 +1,97 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import ContextTypes, MessageHandler, filters, CallbackQueryHandler, TypeHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import ContextTypes, CallbackQueryHandler, TypeHandler, MessageHandler, filters
+from config import Config
 
 logger = logging.getLogger(__name__)
 
-# --- [ الإعدادات الصارمة ] ---
+# --- [ الإعدادات ] ---
 CHANNEL_ID = "@NN26S"
 GROUP_ID = -1003493496120 
 CHANNEL_LINK = "https://t.me/NN26S"
 GROUP_LINK = "https://t.me/Anonymousa_Arabic"
 
-# نص الزر الأساسي الذي سيظهر في الكيبورد بالأسفل
-VERIFY_BUTTON_TEXT = "🛡️ فحص حالة الاشتراك وتفعيل البوت"
-
 async def setup(application):
-    # المجموعة -100 لضمان التنفيذ قبل أي موديول آخر نهائياً
+    # حارس الاشتراك (الأولوية القصوى)
     application.add_handler(TypeHandler(Update, mandatory_guard), group=-100)
-    # معالج الضغط على زر الكيبورد الثابت
-    application.add_handler(MessageHandler(filters.Regex(f"^{VERIFY_BUTTON_TEXT}$"), handle_verify_request), group=-100)
+    # حذف رسائل الانضمام والمغادرة من المجموعة
+    application.add_handler(MessageHandler(filters.StatusUpdate.ALL, clean_group_logs), group=-99)
 
-async def is_subscribed(bot, user_id):
-    """تحقق فني صارم"""
+async def clean_group_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """حذف مخلفات الانضمام والمغادرة في المجموعة"""
+    try:
+        await update.message.delete()
+    except:
+        pass
+
+async def check_status(bot, user_id):
+    """فحص حالة الاشتراك في القناة والمجموعة منفصلين"""
+    results = {"channel": False, "group": False}
     try:
         ch = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        if ch.status in ['member', 'administrator', 'creator']: results["channel"] = True
+        
         gr = await bot.get_chat_member(chat_id=GROUP_ID, user_id=user_id)
-        allowed = ['member', 'administrator', 'creator']
-        return ch.status in allowed and gr.status in allowed
-    except:
-        return False
+        if gr.status in ['member', 'administrator', 'creator']: results["group"] = True
+    except: pass
+    return results
+
+async def send_admin_log(bot, user, action):
+    """إشعار مختصر للمشرف"""
+    try:
+        text = f"👤 {user.first_name} (@{user.username or 'No'}) "
+        text += "🆕 انضم للبوت" if action == "JOIN" else "✅ اكتمل اشتراكه"
+        await bot.send_message(chat_id=Config.ADMIN_ID, text=text)
+    except: pass
 
 async def mandatory_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """منع ظهور أي شيء ما لم يشترك"""
-    if not update.effective_chat or update.effective_chat.type != "private":
-        return
-
-    user_id = update.effective_user.id
+    """منع القائمة الرئيسية وحجز البوت"""
+    if not update.effective_user or update.effective_user.is_bot: return
     
-    # استثناء زر التحقق نفسه من المنع
-    if update.message and update.message.text == VERIFY_BUTTON_TEXT:
-        return
+    user = update.effective_user
+    if user.id == Config.ADMIN_ID: return
 
-    if not await is_subscribed(context.bot, user_id):
-        # إنشاء كيبورد أسفل الشاشة يحتوي على زر واحد فقط (إجباري)
-        fixed_kb = ReplyKeyboardMarkup([[KeyboardButton(VERIFY_BUTTON_TEXT)]], resize_keyboard=True)
-        
-        # أزرار الروابط (للتوجيه)
-        inline_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 انضم للقناة الرسمية", url=CHANNEL_LINK)],
-            [InlineKeyboardButton("💬 انضم لمجموعة الدردشة", url=GROUP_LINK)]
-        ])
+    status = await check_status(context.bot, user.id)
 
-        text = (
-            "⚠️ **تـنبيه أمني: الـوصول مـحجوب!**\n"
-            "━━━━━━━━━━━━━━\n"
-            "عذراً يا عزيزي، نظام الحماية يمنع استخدام البوت قبل الانضمام لقنواتنا الرسمية.\n\n"
-            "✅ **خطوات التفعيل:**\n"
-            "1️⃣ اشترك في القناة والمجموعة بالأسفل.\n"
-            "2️⃣ اضغط على الزر الكبير بالأسفل (فحص الحالة).\n\n"
-            "🛡️ *سيتم فتح كافة المميزات تلقائياً بعد الاشتراك.*"
-        )
+    # إذا لم يكتمل الاشتراك
+    if not (status["channel"] and status["group"]):
+        if update.message and update.message.text == "/start":
+            if not context.user_data.get('logged'):
+                await send_admin_log(context.bot, user, "JOIN")
+                context.user_data['logged'] = True
+
+        # بناء الرسالة الذكية
+        text = "🔒 **لتفعيل حسابك، يرجى اتباع الخطوات:**\n\n"
+        if not status["channel"]:
+            text += f"1️⃣ اشترك أولًا في القناة: [القناة الرسمية]({CHANNEL_LINK})\n"
+        if not status["group"]:
+            text += f"2️⃣ ثم انضم للمجموعة: [مجموعة النقاش]({GROUP_LINK})\n"
         
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=text,
-            reply_markup=fixed_kb, # زر ثابت بالأسفل
-            parse_mode="Markdown"
-        )
+        text += "\n▶️ **بعد ذلك اضغط (تفعيل / Start)**"
+
+        # أزرار الروابط
+        keyboard = []
+        if not status["channel"]:
+            keyboard.append([InlineKeyboardButton("📢 القناة الرسمية", url=CHANNEL_LINK)])
+        if not status["group"]:
+            keyboard.append([InlineKeyboardButton("💬 مجموعة النقاش", url=GROUP_LINK)])
         
-        # إرسال أزرار الروابط كرسالة ثانية للتوضيح
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="🔗 **روابط الانضمام السريعة:**",
-            reply_markup=inline_kb,
-            parse_mode="Markdown"
-        )
+        # زر التفعيل الموحد
+        keyboard.append([InlineKeyboardButton("▶️ Start | 🔓 تفعيل", url=f"https://t.me/{(await context.bot.get_me()).username}?start=verify")])
+
+        if update.message:
+            await update.message.reply_text(
+                text, 
+                reply_markup=InlineKeyboardMarkup(keyboard), 
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
         
+        # إيقاف معالجة أي موديول آخر (بما في ذلك main.py) لضمان حجز البوت
         raise context.ApplicationHandlerStop
-
-async def handle_verify_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة طلب التحقق من زر الكيبورد الثابت"""
-    user_id = update.effective_user.id
     
-    if await is_subscribed(context.bot, user_id):
-        # إذا اشترك، نرسل له رسالة نجاح ونستدعي الـ Start لإظهار المنيو الحقيقي
-        await update.message.reply_text("✅ **عبقري! تم التحقق بنجاح.**\nجاري تشغيل محرك البوت...", parse_mode="Markdown")
-        from main import start
-        await start(update, context)
-    else:
-        # إذا لم يشترك، نبقي القفل كما هو مع تنبيه
-        await update.message.reply_text(
-            "❌ **لم يتم العثور على اشتراكك بعد!**\n"
-            "يرجى التأكد من الانضمام للقناة والمجموعة ثم المحاولة مرة أخرى.",
-            parse_mode="Markdown"
-        )
+    # إذا اكتمل الاشتراك للتو
+    if status["channel"] and status["group"] and not context.user_data.get('verified'):
+        await send_admin_log(context.bot, user, "VERIFIED")
+        context.user_data['verified'] = True
+

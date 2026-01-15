@@ -1,5 +1,5 @@
 class Config:
     ADMIN_ID = 7834574830  # تأكد أن هذا هو معرفك الصحيح
-    BOT_TOKEN = "8221859242:AAGArDTW8QjJ5zYkgdL9wm80uQCuZ9RbAFU"
+    BOT_TOKEN = "8591665308:AAFkfuzbHn2yQga4Mx6SJRGuDFZkGTkMijw"
     MONGO_URL = "mongodb+srv://sportsamy0_db_user:Samijdjdjbdj@samiq.iaq4b8z.mongodb.net/TelegramBot?retryWrites=true&w=majority&appName=samiq"
     DYNAMIC_BUTTONS = {}
